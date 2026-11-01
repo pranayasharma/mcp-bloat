@@ -19,7 +19,14 @@ from .models import (
     resolve_frontier,
     resolve_model,
 )
-from .report import grand_total, render_json, render_terminal
+from .report import (
+    find_tool_matches,
+    grand_total,
+    render_json,
+    render_terminal,
+    render_tool_json,
+    render_tool_terminal,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -66,6 +73,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="URL",
         help="audit one remote MCP server directly at this streamable-HTTP URL",
+    )
+    parser.add_argument(
+        "--tool",
+        default=None,
+        metavar="NAME",
+        help=(
+            "look up a single tool by name instead of printing the full "
+            "audit: audits as usual, then reports just that tool — which "
+            "server(s) host it, its total token cost, its share of the "
+            "server and of the context window, and a description/schema "
+            "cost split. Exits 2 if no tool matches"
+        ),
     )
     parser.add_argument(
         "--name",
@@ -183,6 +202,58 @@ def _resolve_window(
     return 2
 
 
+def _run_tool_lookup(
+    args: argparse.Namespace,
+    results,
+    warnings,
+    *,
+    context_window: int,
+    model: ModelInfo | None,
+    console: Console,
+    err_console: Console,
+) -> int:
+    """--tool NAME: focused report for one tool across the audit results.
+
+    Exit 0 when at least one match is found, 2 when nothing matches
+    (with the closest existing tool names offered as suggestions).
+    --summary has no meaning in this mode and is ignored.
+    """
+    matches, suggestions = find_tool_matches(results, args.tool)
+    if not matches:
+        if args.json:
+            # stdout stays valid JSON; the explanation goes to stderr.
+            print(render_tool_json(results, args.tool, context_window))
+            out = err_console
+        else:
+            out = console
+        out.print(
+            f"[red]error:[/red] tool {args.tool!r} not found in any "
+            "audited server."
+        )
+        if suggestions:
+            out.print("Closest tool names that do exist:")
+            for name in suggestions:
+                out.print(f"  {name}")
+        else:
+            out.print(
+                "No tools were found in any audited server to "
+                "compare against."
+            )
+        return 2
+    if args.json:
+        print(render_tool_json(results, args.tool, context_window))
+    else:
+        render_tool_terminal(
+            matches,
+            args.tool,
+            warnings,
+            console=console,
+            context_window=context_window,
+            model=model,
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -197,11 +268,14 @@ def main(argv: list[str] | None = None) -> int:
     # Default mode (no --model/--window): also line the total up against
     # several frontier models' windows in the summary. Single-window
     # mode keeps its summary unchanged, so frontier stays None there.
+    # Tool lookup mode doesn't need it either.
     frontier = (
         resolve_frontier()
-        if args.model is None and args.window is None
+        if args.model is None and args.window is None and not args.tool
         else None
     )
+
+    no_servers = False
 
     if args.demo:
         results, warnings = run_demo(timeout=args.timeout)
@@ -233,31 +307,49 @@ def main(argv: list[str] | None = None) -> int:
             discovered = discover()
         warnings = discovered.warnings
         if not discovered.servers:
-            if args.json:
-                print(
-                    render_json(
-                        [],
-                        warnings,
-                        context_window=context_window,
-                        model=model,
-                        frontier=frontier,
-                    )
+            no_servers = True
+            results = []
+        else:
+            results = asyncio.run(
+                audit_all(discovered.servers, timeout=args.timeout)
+            )
+
+    if args.tool:
+        return _run_tool_lookup(
+            args,
+            results,
+            warnings,
+            context_window=context_window,
+            model=model,
+            console=console,
+            err_console=err_console,
+        )
+
+    if no_servers:
+        if args.json:
+            print(
+                render_json(
+                    [],
+                    warnings,
+                    context_window=context_window,
+                    model=model,
+                    frontier=frontier,
                 )
-            else:
-                for warning in warnings:
-                    err_console.print(
-                        f"[yellow]warning:[/yellow] {warning.source}: "
-                        f"{warning.message}"
-                    )
-                console.print("No MCP servers found in any known config file.")
-                console.print("Searched:")
-                for location in searched_locations():
-                    console.print(f"  {location}")
-                console.print(
-                    "Tip: point --config at a config file, or try --demo."
+            )
+        else:
+            for warning in warnings:
+                err_console.print(
+                    f"[yellow]warning:[/yellow] {warning.source}: "
+                    f"{warning.message}"
                 )
-            return 0
-        results = asyncio.run(audit_all(discovered.servers, timeout=args.timeout))
+            console.print("No MCP servers found in any known config file.")
+            console.print("Searched:")
+            for location in searched_locations():
+                console.print(f"  {location}")
+            console.print(
+                "Tip: point --config at a config file, or try --demo."
+            )
+        return 0
 
     total = grand_total(results)
     if args.json:

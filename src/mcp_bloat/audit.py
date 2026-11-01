@@ -59,6 +59,12 @@ _MAX_CONCURRENT = 5
 class ToolInfo:
     name: str
     tokens: int
+    # Cost split of the tool payload: the {name, description} part and
+    # the inputSchema part, counted separately. The two parts plus the
+    # JSON structure of the combined payload roughly add up to
+    # ``tokens`` — close, not exact, so reports present them with "≈".
+    description_tokens: int = 0
+    schema_tokens: int = 0
 
 
 @dataclass
@@ -114,7 +120,18 @@ def _tool_tokens(tool: object) -> ToolInfo:
             or {}
         )
     payload = {"name": name, "description": description, "inputSchema": schema}
-    return ToolInfo(name=str(name), tokens=count_tokens(json.dumps(payload, ensure_ascii=False)))
+    description_tokens = count_tokens(
+        json.dumps(
+            {"name": name, "description": description}, ensure_ascii=False
+        )
+    )
+    schema_tokens = count_tokens(json.dumps(schema, ensure_ascii=False))
+    return ToolInfo(
+        name=str(name),
+        tokens=count_tokens(json.dumps(payload, ensure_ascii=False)),
+        description_tokens=description_tokens,
+        schema_tokens=schema_tokens,
+    )
 
 
 def _item_tokens(item: object, keys: tuple[str, ...]) -> int:

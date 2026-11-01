@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 from collections import OrderedDict
 
@@ -63,6 +64,157 @@ def percent_of_context(
     return 100.0 * tokens / context_window
 
 
+# ---------------------------------------------------------------------------
+# Single-tool lookup (--tool NAME): the audit runs as usual, then the
+# report focuses on just the tool(s) matching the requested name.
+# ---------------------------------------------------------------------------
+
+
+def find_tool_matches(
+    results: list[ServerAudit], query: str
+) -> tuple[list[tuple[ServerAudit, ToolInfo]], list[str]]:
+    """Locate one tool by name across all successfully audited servers.
+
+    Returns (matches, suggestions). Matching tiers: an exact
+    case-insensitive name match wins; failing that, case-insensitive
+    substring matches. When neither yields anything, ``matches`` is
+    empty and ``suggestions`` holds the closest tool names that do
+    exist (difflib, at most 5).
+    """
+    pairs = [
+        (audit, info)
+        for audit in results
+        if audit.ok
+        for info in audit.tools
+    ]
+    needle = query.lower()
+    exact = [pair for pair in pairs if pair[1].name.lower() == needle]
+    if exact:
+        return exact, []
+    substring = [pair for pair in pairs if needle in pair[1].name.lower()]
+    if substring:
+        return substring, []
+    names = list(dict.fromkeys(info.name for _audit, info in pairs))
+    suggestions = difflib.get_close_matches(query, names, n=5, cutoff=0.6)
+    if not suggestions:
+        lowered = {name.lower(): name for name in names}
+        suggestions = [
+            lowered[match]
+            for match in difflib.get_close_matches(
+                needle, list(lowered), n=5, cutoff=0.6
+            )
+        ]
+    return [], suggestions
+
+
+def _tool_match_dict(
+    audit: ServerAudit, info: ToolInfo, context_window: int
+) -> dict:
+    return {
+        "name": info.name,
+        "server": audit.entry.name,
+        "client": audit.entry.client,
+        "source": audit.entry.source,
+        "tokens": info.tokens,
+        "percent_of_server": round(percent_of_server(info.tokens, audit), 2),
+        "percent_of_context": round(
+            percent_of_context(info.tokens, context_window), 2
+        ),
+        "description_tokens": info.description_tokens,
+        "schema_tokens": info.schema_tokens,
+    }
+
+
+def tool_to_json_dict(
+    results: list[ServerAudit],
+    query: str,
+    context_window: int = DEFAULT_CONTEXT_WINDOW,
+) -> dict:
+    """The --tool report as a JSON-ready dict (matches may be empty)."""
+    matches, _suggestions = find_tool_matches(results, query)
+    return {
+        "tool": query,
+        "matches": [
+            _tool_match_dict(audit, info, context_window)
+            for audit, info in matches
+        ],
+    }
+
+
+def render_tool_json(
+    results: list[ServerAudit],
+    query: str,
+    context_window: int = DEFAULT_CONTEXT_WINDOW,
+) -> str:
+    return json.dumps(
+        tool_to_json_dict(results, query, context_window), indent=2
+    )
+
+
+def render_tool_terminal(
+    matches: list[tuple[ServerAudit, ToolInfo]],
+    query: str,
+    warnings: list[DiscoveryWarning] | None = None,
+    console: Console | None = None,
+    context_window: int = DEFAULT_CONTEXT_WINDOW,
+    model: ModelInfo | None = None,
+) -> None:
+    """Focused terminal report for the tool(s) matching ``query``."""
+    console = console or Console()
+
+    for warning in warnings or []:
+        console.print(
+            f"[yellow]warning:[/yellow] {warning.source}: {warning.message}"
+        )
+
+    table = Table(
+        title=f"Tool lookup: {query}",
+        title_justify="left",
+        header_style="bold",
+    )
+    table.add_column("Tool")
+    table.add_column("Server")
+    table.add_column("Source")
+    table.add_column("Tokens", justify="right")
+    table.add_column("% of server", justify="right")
+    table.add_column(f"% of {_short_window(context_window)} ctx", justify="right")
+    table.add_column("Cost split")
+    for audit, info in matches:
+        table.add_row(
+            info.name,
+            audit.entry.name,
+            f"{audit.entry.client} — {audit.entry.source}",
+            _fmt(info.tokens),
+            f"{percent_of_server(info.tokens, audit):.1f}%",
+            f"{percent_of_context(info.tokens, context_window):.1f}%",
+            f"description ≈ {_fmt(info.description_tokens)}"
+            f" · schema ≈ {_fmt(info.schema_tokens)}",
+        )
+    console.print(table)
+    console.print()
+
+    summary = Text()
+    count = len(matches)
+    summary.append(
+        f"{count} match{'es' if count != 1 else ''} for {query!r} "
+        f"across {len({id(audit) for audit, _info in matches})} server(s).\n"
+    )
+    summary.append(
+        "Cost split: description counts the tool's name + description "
+        "text; schema counts its inputSchema. The two parts plus the "
+        "JSON structure roughly add up to the total.\n"
+    )
+    summary.append(f"Counting method: {counting_method()}")
+    if model is not None:
+        summary.append(
+            f"\nModel: {model.id} ({model.name}) — window "
+            f"{_fmt(context_window)} tokens, via {model.source}"
+        )
+    console.print(
+        Panel(summary, title="mcp-bloat tool lookup", title_align="left", expand=False)
+    )
+
+
 def _short_window(context_window: int) -> str:
     """Compact window label for table headers: 200k, 400k, 1M, 1.31M."""
     if context_window >= 1_000_000:
@@ -111,6 +263,8 @@ def to_json_dict(
                         "percent_of_server": round(
                             percent_of_server(t.tokens, r), 2
                         ),
+                        "description_tokens": t.description_tokens,
+                        "schema_tokens": t.schema_tokens,
                     }
                     for t in sorted_tools(r)
                 ],

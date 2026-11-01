@@ -52,6 +52,9 @@ mcp-bloat --config ./mcp.json
 # use through ChatGPT or another hosted client
 mcp-bloat --url https://example.com/mcp
 
+# Look up ONE tool by name — which server(s) host it and what it costs
+mcp-bloat --tool createPaymentTransaction
+
 # If that server expects an Authorization header, pass it through
 # (--header is repeatable, and --name sets the label shown in the report)
 mcp-bloat --url https://example.com/mcp --header "Authorization: Bearer <token>"
@@ -75,6 +78,47 @@ a small built-in snapshot when you're offline), and the report states
 which model and window it used. `--window N` skips the lookup and uses
 exactly N tokens. A server that eats 14% of a 200k window eats about 22%
 of a 128k one — same tokens, different pain.
+
+### Looking up a single tool
+
+The full audit tells you which *server* is fat; sometimes you just want
+one *tool*. `--tool NAME` runs the audit as usual, then reports only
+that tool — no URL or config spelunking needed, since the tool names
+come from the servers themselves:
+
+```bash
+mcp-bloat --tool createPaymentTransaction
+```
+
+Matching is exact and case-insensitive first, then falls back to
+substring matches. If the same tool name is hosted by several servers,
+every match is shown. Each match reports the server and config it came
+from, the tool's total tokens, its share of that server's tool bill and
+of the context window, and a cost split — how much of the bill is the
+name + description text versus the input schema (the two parts plus the
+JSON structure roughly add up to the total). If nothing matches, you
+get the closest tool names that do exist and exit code 2. `--tool`
+combines with `--config` and `--url` to search just that target, and
+with `--model`/`--window` for the window percentage; with `--json` it
+prints `{"tool": ..., "matches": [...]}` instead.
+
+From `mcp-bloat --demo --tool run_tests`:
+
+```
+Tool lookup: run_tests
+┏━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Tool      ┃ Server      ┃ Source                                     ┃ Tokens ┃ % of server ┃ % of 200k ctx ┃ Cost split                      ┃
+┡━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ run_tests │ dev-toolbox │ Demo — mcp-bloat --demo (generated config) │    208 │        8.7% │          0.1% │ description ≈ 39 · schema ≈ 166 │
+└───────────┴─────────────┴────────────────────────────────────────────┴────────┴─────────────┴───────────────┴─────────────────────────────────┘
+
+╭─ mcp-bloat tool lookup ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 1 match for 'run_tests' across 1 server(s).                                                                                                                  │
+│ Cost split: description counts the tool's name + description text; schema counts its inputSchema. The two parts plus the JSON structure roughly add up to    │
+│ the total.                                                                                                                                                   │
+│ Counting method: tiktoken cl100k_base                                                                                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+```
 
 ## Sample output
 
@@ -135,7 +179,8 @@ tools — every tool's token cost, fattest first, with its share of the
 server's tool bill — and the summary names the single most expensive
 tool of the whole run. Pass `--summary` to collapse the report back to
 per-server totals only; `--json` always includes the per-tool data
-(each server's `tools` array, plus a top-level `most_expensive_tool`).
+(each server's `tools` array — including each tool's description/schema
+token split — plus a top-level `most_expensive_tool`).
 
 In default mode (no `--model`/`--window`), the summary also lines your
 total up against several current frontier models' context windows at
