@@ -33,4 +33,4 @@ mcp-bloat = "mcp_bloat.cli:main"
 packages = ["src/mcp_bloat"]
 
 [project.urls]
-Homepage = "https://github.com/pranayasharma8/mcp-bloat"
+Homepage = "https://github.com/pranayasharma/mcp-bloat"
