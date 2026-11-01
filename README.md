@@ -1,5 +1,9 @@
 # mcp-bloat
 
+[![PyPI version](https://img.shields.io/pypi/v/mcp-bloat)](https://pypi.org/project/mcp-bloat/)
+[![Python versions](https://img.shields.io/pypi/pyversions/mcp-bloat)](https://pypi.org/project/mcp-bloat/)
+[![License: MIT](https://img.shields.io/pypi/l/mcp-bloat)](https://github.com/pranayasharma/mcp-bloat/blob/main/LICENSE)
+
 **Audit how many tokens your MCP servers eat from your context window — before your agent pays for them.**
 
 Every MCP server you connect makes your AI client load that server's tool
@@ -48,7 +52,26 @@ mcp-bloat --url https://example.com/mcp
 # If that server expects an Authorization header, pass it through
 # (--header is repeatable, and --name sets the label shown in the report)
 mcp-bloat --url https://example.com/mcp --header "Authorization: Bearer <token>"
+
+# Compute the percentages against a specific model's context window —
+# looked up live from OpenRouter/LiteLLM (free, no API key; cached 24h)
+mcp-bloat --model gpt-5
+mcp-bloat --model claude-sonnet-4-5
+
+# …or set the window size yourself (this overrides --model)
+mcp-bloat --window 128000
 ```
+
+### Which window am I using?
+
+Every percentage in the report is relative to a context window. By
+default that's 200,000 tokens. Pass `--model NAME` to measure against
+the window of the model you actually use — `mcp-bloat` resolves the name
+against live model data from OpenRouter (with LiteLLM as a fallback and
+a small built-in snapshot when you're offline), and the report states
+which model and window it used. `--window N` skips the lookup and uses
+exactly N tokens. A server that eats 14% of a 200k window eats about 22%
+of a 128k one — same tokens, different pain.
 
 ## Sample output
 

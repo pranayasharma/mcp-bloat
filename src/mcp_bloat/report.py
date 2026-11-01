@@ -12,9 +12,12 @@ from rich.text import Text
 
 from .audit import ServerAudit
 from .discovery import DiscoveryWarning
+from .models import DEFAULT_CONTEXT_WINDOW, ModelInfo
 from .tokens import counting_method
 
-CONTEXT_WINDOW = 200_000
+# Backwards-compatible alias: the default window used when no --model or
+# --window is given.
+CONTEXT_WINDOW = DEFAULT_CONTEXT_WINDOW
 BLOAT_THRESHOLD = 10_000  # a single server above this gets flagged
 
 
@@ -22,19 +25,35 @@ def grand_total(results: list[ServerAudit]) -> int:
     return sum(r.total_tokens for r in results)
 
 
-def percent_of_context(tokens: int) -> float:
-    return 100.0 * tokens / CONTEXT_WINDOW
+def percent_of_context(
+    tokens: int, context_window: int = DEFAULT_CONTEXT_WINDOW
+) -> float:
+    if context_window <= 0:
+        return 0.0
+    return 100.0 * tokens / context_window
+
+
+def _short_window(context_window: int) -> str:
+    """Compact window label for table headers: 200k, 400k, 1M, 1.31M."""
+    if context_window >= 1_000_000:
+        value = context_window / 1_000_000
+        return f"{value:.0f}M" if value == int(value) else f"{value:.2f}M"
+    return f"{context_window / 1000:.0f}k"
 
 
 def to_json_dict(
-    results: list[ServerAudit], warnings: list[DiscoveryWarning] | None = None
+    results: list[ServerAudit],
+    warnings: list[DiscoveryWarning] | None = None,
+    context_window: int = DEFAULT_CONTEXT_WINDOW,
+    model: ModelInfo | None = None,
 ) -> dict:
     total = grand_total(results)
     return {
         "counting_method": counting_method(),
-        "context_window": CONTEXT_WINDOW,
+        "model": model.id if model else None,
+        "context_window": context_window,
         "total_tokens": total,
-        "percent_of_context": round(percent_of_context(total), 2),
+        "percent_of_context": round(percent_of_context(total, context_window), 2),
         "servers": [
             {
                 "name": r.entry.name,
@@ -53,7 +72,9 @@ def to_json_dict(
                 "resource_count": r.resource_count,
                 "resources_tokens": r.resources_tokens,
                 "total_tokens": r.total_tokens,
-                "percent_of_context": round(percent_of_context(r.total_tokens), 2),
+                "percent_of_context": round(
+                    percent_of_context(r.total_tokens, context_window), 2
+                ),
             }
             for r in results
         ],
@@ -64,9 +85,14 @@ def to_json_dict(
 
 
 def render_json(
-    results: list[ServerAudit], warnings: list[DiscoveryWarning] | None = None
+    results: list[ServerAudit],
+    warnings: list[DiscoveryWarning] | None = None,
+    context_window: int = DEFAULT_CONTEXT_WINDOW,
+    model: ModelInfo | None = None,
 ) -> str:
-    return json.dumps(to_json_dict(results, warnings), indent=2)
+    return json.dumps(
+        to_json_dict(results, warnings, context_window, model), indent=2
+    )
 
 
 def _fmt(n: int) -> str:
@@ -77,6 +103,8 @@ def render_terminal(
     results: list[ServerAudit],
     warnings: list[DiscoveryWarning] | None = None,
     console: Console | None = None,
+    context_window: int = DEFAULT_CONTEXT_WINDOW,
+    model: ModelInfo | None = None,
 ) -> None:
     console = console or Console()
 
@@ -101,7 +129,7 @@ def render_terminal(
         table.add_column("Transport")
         table.add_column("Tools", justify="right")
         table.add_column("Tokens", justify="right")
-        table.add_column("% of 200k ctx", justify="right")
+        table.add_column(f"% of {_short_window(context_window)} ctx", justify="right")
         table.add_column("Status")
         for r in group:
             if r.ok:
@@ -117,7 +145,7 @@ def render_terminal(
                     r.entry.transport,
                     str(r.tool_count),
                     tokens_text,
-                    f"{percent_of_context(r.total_tokens):.1f}%",
+                    f"{percent_of_context(r.total_tokens, context_window):.1f}%",
                     status,
                 )
             else:
@@ -140,14 +168,23 @@ def render_terminal(
     summary = Text()
     summary.append("Total: ", style="bold")
     summary.append(f"{_fmt(total)} tokens")
+    if model is not None:
+        window_phrase = f"{model.id}'s {_fmt(context_window)}-token window"
+    else:
+        window_phrase = f"a {_fmt(context_window)}-token context window"
     summary.append(
-        f"  ({percent_of_context(total):.1f}% of a {_fmt(CONTEXT_WINDOW)}-token"
-        " context window)\n"
+        f"  ({percent_of_context(total, context_window):.1f}% of "
+        f"{window_phrase})\n"
     )
     summary.append(f"Servers audited: {ok_count}")
     if failed:
         summary.append(f"   ·   failed: {failed}", style="red")
     summary.append(f"\nCounting method: {counting_method()}")
+    if model is not None:
+        summary.append(
+            f"\nModel: {model.id} ({model.name}) — window "
+            f"{_fmt(context_window)} tokens, via {model.source}"
+        )
     if bloated:
         names = ", ".join(
             f"{r.entry.name} ({_fmt(r.total_tokens)})" for r in bloated

@@ -13,6 +13,7 @@ from . import __version__
 from .audit import DEFAULT_TIMEOUT, audit_all
 from .demo import run_demo
 from .discovery import ServerEntry, discover, load_config_file, searched_locations
+from .models import DEFAULT_CONTEXT_WINDOW, ModelInfo, resolve_model
 from .report import grand_total, render_json, render_terminal
 
 
@@ -77,9 +78,40 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"per-server connection timeout (default {DEFAULT_TIMEOUT:g})",
     )
     parser.add_argument(
+        "--model",
+        default=None,
+        metavar="NAME",
+        help=(
+            "compute percentages against this model's context window "
+            '(e.g. --model gpt-5, --model claude-sonnet-4-5); looked up '
+            "live from OpenRouter/LiteLLM, no API key needed"
+        ),
+    )
+    parser.add_argument(
+        "--window",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help=(
+            "compute percentages against a context window of N tokens; "
+            "overrides --model (default window: "
+            f"{DEFAULT_CONTEXT_WINDOW:,})"
+        ),
+    )
+    parser.add_argument(
         "--version", action="version", version=f"mcp-bloat {__version__}"
     )
     return parser
+
+
+def _positive_int(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer")
+    if number <= 0:
+        raise argparse.ArgumentTypeError("window size must be positive")
+    return number
 
 
 def _parse_headers(
@@ -95,11 +127,59 @@ def _parse_headers(
     return headers
 
 
+def _resolve_window(
+    args: argparse.Namespace, err_console: Console
+) -> tuple[int, ModelInfo | None] | int:
+    """Resolve the context window from --window / --model.
+
+    Returns (context_window, model) on success, or an exit code to
+    return immediately (2 when --model names nothing we can find).
+    """
+    if args.window is not None:
+        return args.window, None
+    if not args.model:
+        return DEFAULT_CONTEXT_WINDOW, None
+
+    resolution = resolve_model(args.model)
+    if resolution.info is not None:
+        return resolution.info.context_length, resolution.info
+    if not resolution.data_available:
+        err_console.print(
+            "[yellow]warning:[/yellow] could not look up model data "
+            "(offline and no cached copy), and "
+            f"{args.model!r} is not in the built-in snapshot; falling "
+            f"back to the default {DEFAULT_CONTEXT_WINDOW:,}-token window"
+        )
+        return DEFAULT_CONTEXT_WINDOW, None
+
+    err_console.print(
+        f"[red]error:[/red] no model matching {args.model!r} was found."
+    )
+    if resolution.candidates:
+        err_console.print("Closest matches:")
+        for candidate in resolution.candidates:
+            err_console.print(
+                f"  {candidate.id} — {candidate.context_length:,} tokens"
+            )
+        err_console.print("Re-run with one of those names, or use --window N.")
+    else:
+        err_console.print(
+            "Check the spelling, or use --window N to set the window "
+            "size directly."
+        )
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     console = Console()
     err_console = Console(stderr=True)
+
+    resolved = _resolve_window(args, err_console)
+    if isinstance(resolved, int):
+        return resolved
+    context_window, model = resolved
 
     if args.demo:
         results, warnings = run_demo(timeout=args.timeout)
@@ -132,7 +212,14 @@ def main(argv: list[str] | None = None) -> int:
         warnings = discovered.warnings
         if not discovered.servers:
             if args.json:
-                print(render_json([], warnings))
+                print(
+                    render_json(
+                        [],
+                        warnings,
+                        context_window=context_window,
+                        model=model,
+                    )
+                )
             else:
                 for warning in warnings:
                     err_console.print(
@@ -151,9 +238,22 @@ def main(argv: list[str] | None = None) -> int:
 
     total = grand_total(results)
     if args.json:
-        print(render_json(results, warnings))
+        print(
+            render_json(
+                results,
+                warnings,
+                context_window=context_window,
+                model=model,
+            )
+        )
     else:
-        render_terminal(results, warnings, console=console)
+        render_terminal(
+            results,
+            warnings,
+            console=console,
+            context_window=context_window,
+            model=model,
+        )
 
     if args.budget is not None and total > args.budget:
         err_console.print(
