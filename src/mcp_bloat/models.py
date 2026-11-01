@@ -22,6 +22,7 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import re
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -359,3 +360,110 @@ def resolve_model(query: str, cache_dir: Path | None = None) -> Resolution:
         # default window instead of erroring out.
         return Resolution(info=None, candidates=[], data_available=False)
     return Resolution(info=None, candidates=candidates, data_available=True)
+
+
+# ---------------------------------------------------------------------------
+# Frontier-model comparison (default summary)
+#
+# A curated set of lookup queries, one per flagship model family. Each is
+# resolved against the same merged dataset as resolve_model (live list,
+# then cache, then the built-in snapshot) — no window size is hardcoded
+# here; the numbers always come from the dataset.
+# ---------------------------------------------------------------------------
+
+FRONTIER_QUERIES: list[str] = [
+    "claude-sonnet",  # Anthropic flagship line
+    "gpt-5",  # OpenAI flagship line (GPT-5 / Codex)
+    "gemini-2.5-pro",  # Google flagship line (Gemini Pro)
+    "deepseek-chat",  # DeepSeek flagship chat line
+]
+
+
+def short_display_name(info: ModelInfo) -> str:
+    """Compact label for prose: strip the "Provider: " prefix when present.
+
+    LiteLLM entries have no display name (name == id), so fall back to the
+    id's suffix after the provider "/".
+    """
+    if info.name == info.id and "/" in info.id:
+        return _suffix(info.id)
+    if ": " in info.name:
+        return info.name.split(": ", 1)[1]
+    return info.name
+
+
+def _pick_frontier_match(
+    query: str, models: Mapping[str, ModelInfo]
+) -> ModelInfo | None:
+    """Resolve one frontier family query, preferring current generations.
+
+    find_model gives an exact hit when it can. When a family query is
+    ambiguous (e.g. "claude-sonnet" matches several Sonnet releases),
+    pick deterministically: true family members (suffix starts with the
+    query) first, then the highest version numbers in the suffix, then
+    the largest window, then the shortest (most canonical) id.
+
+    Only genuine family matches are eligible: candidates that merely
+    look similar (find_model's difflib suggestions) are rejected, so a
+    family with no real match is skipped rather than filled by a
+    lookalike from another family.
+    """
+    info, candidates = find_model(query, models)
+    if info is not None:
+        return info
+    q = _norm(query)
+    pool = [
+        c
+        for c in candidates
+        if q in _norm(c.id) or q in _norm(c.name)
+    ]
+    pool = [c for c in pool if ":" not in c.id] or pool
+    if not pool:
+        return None
+
+    def rank(candidate: ModelInfo) -> tuple:
+        suffix = _norm(_suffix(candidate.id))
+        version = tuple(int(n) for n in re.findall(r"\d+", suffix))
+        return (
+            1 if suffix.startswith(q) else 0,
+            version,
+            candidate.context_length,
+            -len(candidate.id),
+        )
+
+    return max(pool, key=rank)
+
+
+def frontier_from_models(models: Mapping[str, ModelInfo]) -> list[ModelInfo]:
+    """Resolve FRONTIER_QUERIES against one merged dataset mapping.
+
+    Families that don't resolve are skipped; a model resolved for two
+    families appears only once. Order follows FRONTIER_QUERIES.
+    """
+    resolved: list[ModelInfo] = []
+    seen: set[str] = set()
+    for query in FRONTIER_QUERIES:
+        info = _pick_frontier_match(query, models)
+        if info is not None and info.id not in seen:
+            seen.add(info.id)
+            resolved.append(info)
+    return resolved
+
+
+def resolve_frontier(cache_dir: Path | None = None) -> list[ModelInfo]:
+    """Resolve the frontier comparison list. Never raises.
+
+    Uses the same sources as resolve_model: the live/cached dataset with
+    the built-in snapshot filling gaps (and acting as the only source
+    when offline). Returns [] when nothing resolves.
+    """
+    try:
+        dataset = load_dataset(cache_dir)
+    except Exception:
+        dataset = Dataset(models={}, source="none", available=False)
+    merged: dict[str, ModelInfo] = dict(BUILTIN_SNAPSHOT)
+    merged.update(dataset.models)  # fetched data wins over the snapshot
+    try:
+        return frontier_from_models(merged)
+    except Exception:
+        return []

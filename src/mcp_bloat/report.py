@@ -12,7 +12,7 @@ from rich.text import Text
 
 from .audit import ServerAudit
 from .discovery import DiscoveryWarning
-from .models import DEFAULT_CONTEXT_WINDOW, ModelInfo
+from .models import DEFAULT_CONTEXT_WINDOW, ModelInfo, short_display_name
 from .tokens import counting_method
 
 # Backwards-compatible alias: the default window used when no --model or
@@ -46,9 +46,10 @@ def to_json_dict(
     warnings: list[DiscoveryWarning] | None = None,
     context_window: int = DEFAULT_CONTEXT_WINDOW,
     model: ModelInfo | None = None,
+    frontier: list[ModelInfo] | None = None,
 ) -> dict:
     total = grand_total(results)
-    return {
+    report = {
         "counting_method": counting_method(),
         "model": model.id if model else None,
         "context_window": context_window,
@@ -82,6 +83,22 @@ def to_json_dict(
             {"source": w.source, "message": w.message} for w in (warnings or [])
         ],
     }
+    if frontier is not None:
+        # Present exactly when the caller ran in default mode (no
+        # --model/--window): the audit total lined up against several
+        # frontier models' windows at once. Absent in single-window mode.
+        report["frontier"] = [
+            {
+                "model": info.id,
+                "name": info.name,
+                "context_window": info.context_length,
+                "percent_of_context": round(
+                    percent_of_context(total, info.context_length), 2
+                ),
+            }
+            for info in frontier
+        ]
+    return report
 
 
 def render_json(
@@ -89,9 +106,11 @@ def render_json(
     warnings: list[DiscoveryWarning] | None = None,
     context_window: int = DEFAULT_CONTEXT_WINDOW,
     model: ModelInfo | None = None,
+    frontier: list[ModelInfo] | None = None,
 ) -> str:
     return json.dumps(
-        to_json_dict(results, warnings, context_window, model), indent=2
+        to_json_dict(results, warnings, context_window, model, frontier),
+        indent=2,
     )
 
 
@@ -105,6 +124,7 @@ def render_terminal(
     console: Console | None = None,
     context_window: int = DEFAULT_CONTEXT_WINDOW,
     model: ModelInfo | None = None,
+    frontier: list[ModelInfo] | None = None,
 ) -> None:
     console = console or Console()
 
@@ -176,6 +196,16 @@ def render_terminal(
         f"  ({percent_of_context(total, context_window):.1f}% of "
         f"{window_phrase})\n"
     )
+    if frontier:
+        # Default mode only: line the same total up against the windows
+        # of several frontier models at once.
+        summary.append(f"Of your {_fmt(total)} tokens, that's:\n")
+        for info in frontier:
+            summary.append(
+                f"  {percent_of_context(total, info.context_length):.1f}% "
+                f"of {short_display_name(info)}'s "
+                f"{_fmt(info.context_length)} window\n"
+            )
     summary.append(f"Servers audited: {ok_count}")
     if failed:
         summary.append(f"   ·   failed: {failed}", style="red")

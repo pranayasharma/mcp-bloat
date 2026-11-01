@@ -13,7 +13,12 @@ from . import __version__
 from .audit import DEFAULT_TIMEOUT, audit_all
 from .demo import run_demo
 from .discovery import ServerEntry, discover, load_config_file, searched_locations
-from .models import DEFAULT_CONTEXT_WINDOW, ModelInfo, resolve_model
+from .models import (
+    DEFAULT_CONTEXT_WINDOW,
+    ModelInfo,
+    resolve_frontier,
+    resolve_model,
+)
 from .report import grand_total, render_json, render_terminal
 
 
@@ -181,6 +186,15 @@ def main(argv: list[str] | None = None) -> int:
         return resolved
     context_window, model = resolved
 
+    # Default mode (no --model/--window): also line the total up against
+    # several frontier models' windows in the summary. Single-window
+    # mode keeps its summary unchanged, so frontier stays None there.
+    frontier = (
+        resolve_frontier()
+        if args.model is None and args.window is None
+        else None
+    )
+
     if args.demo:
         results, warnings = run_demo(timeout=args.timeout)
     elif args.url:
@@ -218,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
                         warnings,
                         context_window=context_window,
                         model=model,
+                        frontier=frontier,
                     )
                 )
             else:
@@ -244,6 +259,7 @@ def main(argv: list[str] | None = None) -> int:
                 warnings,
                 context_window=context_window,
                 model=model,
+                frontier=frontier,
             )
         )
     else:
@@ -253,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
             console=console,
             context_window=context_window,
             model=model,
+            frontier=frontier,
         )
 
     if args.budget is not None and total > args.budget:

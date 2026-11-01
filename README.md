@@ -90,11 +90,22 @@ Demo — mcp-bloat --demo (generated config)
 
 ╭─ mcp-bloat summary ─────────────────────────────────────────────╮
 │ Total: 27,762 tokens  (13.9% of a 200,000-token context window) │
+│ Of your 27,762 tokens, that's:                                  │
+│   2.8% of Claude Sonnet 5.5's 1,000,000 window                  │
+│   6.9% of GPT-5's 400,000 window                                │
+│   2.6% of Gemini 2.5 Pro's 1,048,576 window                     │
+│   16.9% of DeepSeek V3's 163,840 window                         │
 │ Servers audited: 3                                              │
 │ Counting method: tiktoken cl100k_base                           │
 │ ⚠ Over 10,000 tokens on its own: mega-api (25,164)              │
 ╰─────────────────────────────────────────────────────────────────╯
 ```
+
+In default mode (no `--model`/`--window`), the summary also lines your
+total up against several current frontier models' context windows at
+once — resolved from the same live model data — so you can see the cost
+on the models people actually use; pass `--model` or `--window` and the
+summary sticks to that single window instead.
 
 Any single server over 10,000 tokens is flagged `⚠ BLOAT`.
 
