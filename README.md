@@ -40,6 +40,14 @@ mcp-bloat --budget 30000
 
 # Audit one specific config file
 mcp-bloat --config ./mcp.json
+
+# Audit one remote server directly, by URL — for example a server you
+# use through ChatGPT or another hosted client
+mcp-bloat --url https://example.com/mcp
+
+# If that server expects an Authorization header, pass it through
+# (--header is repeatable, and --name sets the label shown in the report)
+mcp-bloat --url https://example.com/mcp --header "Authorization: Bearer <token>"
 ```
 
 ## Sample output
@@ -103,6 +111,14 @@ servers can't corrupt the report.
   `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windsurf** — `~/.codeium/windsurf/mcp_config.json`
 - **VS Code** — `./.vscode/mcp.json` (the `servers` key)
+- **Gemini CLI** — `~/.gemini/settings.json`, `./.gemini/settings.json`
+  (both the `url` and `httpUrl` spellings for HTTP servers)
+- **Codex CLI** — `~/.codex/config.toml` (the `[mcp_servers.*]` tables)
+
+Clients that don't keep MCP servers in a local config file — ChatGPT,
+for instance — can still be covered: take the server's URL and pass it
+to `--url`, with `--header` for any authorization header the server
+expects.
 
 Malformed config files produce a warning, not a crash.
 

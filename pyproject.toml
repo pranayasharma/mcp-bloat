@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-bloat"
-version = "0.1.0"
+version = "0.2.0"
 description = "Audit how many tokens your MCP servers eat from your context window — before your agent pays for them."
 readme = "README.md"
 requires-python = ">=3.10"

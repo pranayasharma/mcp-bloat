@@ -5,13 +5,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from urllib.parse import urlparse
 
 from rich.console import Console
 
 from . import __version__
 from .audit import DEFAULT_TIMEOUT, audit_all
 from .demo import run_demo
-from .discovery import discover, load_config_file, searched_locations
+from .discovery import ServerEntry, discover, load_config_file, searched_locations
 from .report import grand_total, render_json, render_terminal
 
 
@@ -47,6 +48,28 @@ def _build_parser() -> argparse.ArgumentParser:
         help="audit one specific MCP config file instead of auto-discovery",
     )
     parser.add_argument(
+        "--url",
+        default=None,
+        metavar="URL",
+        help="audit one remote MCP server directly at this streamable-HTTP URL",
+    )
+    parser.add_argument(
+        "--name",
+        default=None,
+        metavar="NAME",
+        help="display label for the --url server (default: the URL's host)",
+    )
+    parser.add_argument(
+        "--header",
+        action="append",
+        default=None,
+        metavar="HEADER",
+        help=(
+            'extra HTTP header for --url, as "Name: Value" '
+            '(e.g. "Authorization: Bearer TOKEN"); may be given more than once'
+        ),
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT,
@@ -59,14 +82,49 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _parse_headers(
+    values: list[str] | None, parser: argparse.ArgumentParser
+) -> dict[str, str]:
+    """Turn repeatable --header "Name: Value" options into a mapping."""
+    headers: dict[str, str] = {}
+    for value in values or []:
+        name, sep, val = value.partition(":")
+        if not sep or not name.strip():
+            parser.error(f"invalid --header {value!r}: expected 'Name: Value'")
+        headers[name.strip()] = val.strip()
+    return headers
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
     console = Console()
     err_console = Console(stderr=True)
 
     if args.demo:
         results, warnings = run_demo(timeout=args.timeout)
+    elif args.url:
+        if args.config:
+            err_console.print(
+                "[yellow]warning:[/yellow] --config is ignored when --url "
+                "is given"
+            )
+        entry = ServerEntry(
+            name=args.name or urlparse(args.url).hostname or args.url,
+            source=args.url,
+            client="Remote URL",
+            transport="http",
+            url=args.url,
+            headers=_parse_headers(args.header, parser),
+        )
+        warnings = []
+        results = asyncio.run(audit_all([entry], timeout=args.timeout))
     else:
+        if args.name or args.header:
+            err_console.print(
+                "[yellow]warning:[/yellow] --name/--header only apply "
+                "together with --url; ignoring them"
+            )
         if args.config:
             discovered = load_config_file(args.config)
         else:

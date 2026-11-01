@@ -12,9 +12,12 @@ error result — it never crashes the whole audit.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from typing import AsyncIterator
 
 from .discovery import ServerEntry
 from .tokens import count_tokens
@@ -31,6 +34,22 @@ try:  # mcp SDK 2.x name
     from mcp.client.streamable_http import streamable_http_client as _http_client
 except ImportError:  # mcp SDK 1.x name
     from mcp.client.streamable_http import streamablehttp_client as _http_client
+
+try:  # factory for a pre-configured httpx client (SDK 1.x late / 2.x)
+    from mcp.client.streamable_http import (
+        create_mcp_http_client as _create_http_client,
+    )
+except ImportError:  # pragma: no cover
+    _create_http_client = None  # type: ignore[assignment]
+
+# How this SDK generation accepts request headers:
+# - 2.x: streamable_http_client(url, http_client=<httpx client>) — headers
+#   ride on a caller-supplied client built by create_mcp_http_client, and
+#   the transport does not manage that client's lifecycle.
+# - 1.x: streamablehttp_client(url, headers={...}) took them directly.
+_HTTP_PARAMS = inspect.signature(_http_client).parameters
+_HTTP_ACCEPTS_CLIENT = "http_client" in _HTTP_PARAMS
+_HTTP_ACCEPTS_HEADERS = "headers" in _HTTP_PARAMS
 
 DEFAULT_TIMEOUT = 20.0
 _MAX_CONCURRENT = 5
@@ -188,8 +207,30 @@ def _unpack_streams(streams: object) -> tuple:
     return read, write
 
 
+@asynccontextmanager
+async def _http_streams(
+    url: str, headers: dict[str, str] | None = None
+) -> AsyncIterator[tuple]:
+    """Open the streamable-HTTP transport, with headers if requested."""
+    if headers and _HTTP_ACCEPTS_CLIENT and _create_http_client is not None:
+        # SDK 2.x: headers ride on a caller-supplied httpx client. The
+        # transport leaves a supplied client's lifecycle to us, so we
+        # own it here.
+        async with _create_http_client(headers=headers) as http_client:
+            async with _http_client(url, http_client=http_client) as streams:
+                yield streams
+    elif headers and _HTTP_ACCEPTS_HEADERS:
+        # SDK 1.x accepted a headers mapping directly.
+        async with _http_client(url, headers=headers) as streams:
+            yield streams
+    else:
+        async with _http_client(url) as streams:
+            yield streams
+
+
 async def _audit_http(entry: ServerEntry, audit: ServerAudit) -> None:
-    async with _http_client(entry.url or "") as streams:
+    headers = entry.headers or None
+    async with _http_streams(entry.url or "", headers) as streams:
         read, write = _unpack_streams(streams)
         async with ClientSession(read, write) as session:
             await session.initialize()
