@@ -237,6 +237,30 @@ expects.
 
 Malformed config files produce a warning, not a crash.
 
+## Security
+
+`mcp-bloat` is read-only: it never modifies your config files or your
+servers. A few things worth knowing before you run it:
+
+- **It starts your servers.** Auditing works by launching each
+  configured MCP server exactly the way your client would (stdio
+  commands are executed; HTTP endpoints are connected to) and asking it
+  to list its tools. Only audit configs you trust — a malicious server
+  in a config you copied from the internet gets run, same as it would
+  by Claude or Cursor.
+- **Your secrets stay yours.** Config files often hold API keys in
+  `env` blocks. Those values are passed to the server process that
+  needs them and are never printed — not in the terminal report, not
+  in `--json` output. The same goes for `--header` values.
+- **No telemetry.** There is no analytics, no phone-home, and no
+  account. The only network requests are to your own configured HTTP
+  servers and the model-list lookups (OpenRouter / LiteLLM) — plain
+  GETs that send no data about you or your configs, cached locally for
+  24 hours. Everything works offline from the cache or the built-in
+  snapshot.
+
+Found a problem? Please open an issue on GitHub.
+
 ## License
 
 MIT
