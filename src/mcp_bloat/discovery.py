@@ -10,6 +10,7 @@ crash.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -62,7 +63,7 @@ def candidate_files(
     """All (client label, config path, server-map key) we know to look for."""
     home = home or Path.home()
     cwd = cwd or Path.cwd()
-    return [
+    files: list[tuple[str, Path, str]] = [
         ("Claude Code", home / ".claude.json", STD_KEY),
         ("Claude Code", cwd / ".mcp.json", STD_KEY),
         ("Cursor", home / ".cursor" / "mcp.json", STD_KEY),
@@ -86,6 +87,17 @@ def candidate_files(
         ("Gemini CLI", home / ".gemini" / "settings.json", STD_KEY),
         ("Gemini CLI", cwd / ".gemini" / "settings.json", STD_KEY),
     ]
+    # Windows: Claude Desktop keeps its config under %APPDATA%\Claude.
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        files.append(
+            (
+                "Claude Desktop",
+                Path(appdata) / "Claude" / "claude_desktop_config.json",
+                STD_KEY,
+            )
+        )
+    return files
 
 
 def toml_candidate_files(

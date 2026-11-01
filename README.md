@@ -223,7 +223,8 @@ servers can't corrupt the report.
 - **Claude Code** — `~/.claude.json`, `./.mcp.json`
 - **Cursor** — `~/.cursor/mcp.json`, `./.cursor/mcp.json`
 - **Claude Desktop** — `~/.config/Claude/claude_desktop_config.json`,
-  `~/Library/Application Support/Claude/claude_desktop_config.json`
+  `~/Library/Application Support/Claude/claude_desktop_config.json`,
+  `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
 - **Windsurf** — `~/.codeium/windsurf/mcp_config.json`
 - **VS Code** — `./.vscode/mcp.json` (the `servers` key)
 - **Gemini CLI** — `~/.gemini/settings.json`, `./.gemini/settings.json`
