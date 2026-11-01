@@ -39,6 +39,9 @@ mcp-bloat --demo
 # Machine-readable output
 mcp-bloat --json
 
+# Just the per-server totals, without the per-tool breakdown
+mcp-bloat --summary
+
 # Fail CI if your servers eat more than 30,000 tokens of context
 mcp-bloat --budget 30000
 
@@ -88,18 +91,51 @@ Demo — mcp-bloat --demo (generated config)
 │ mega-api    │ stdio     │    50 │ 25,164 │         12.6% │ ⚠ BLOAT │
 └─────────────┴───────────┴───────┴────────┴───────────────┴─────────┘
 
-╭─ mcp-bloat summary ─────────────────────────────────────────────╮
-│ Total: 27,762 tokens  (13.9% of a 200,000-token context window) │
-│ Of your 27,762 tokens, that's:                                  │
-│   2.8% of Claude Sonnet 5.5's 1,000,000 window                  │
-│   6.9% of GPT-5's 400,000 window                                │
-│   2.6% of Gemini 2.5 Pro's 1,048,576 window                     │
-│   16.9% of DeepSeek V3's 163,840 window                         │
-│ Servers audited: 3                                              │
-│ Counting method: tiktoken cl100k_base                           │
-│ ⚠ Over 10,000 tokens on its own: mega-api (25,164)              │
-╰─────────────────────────────────────────────────────────────────╯
+…
+
+dev-toolbox — tools by cost
+┏━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━┓
+┃ Tool           ┃ Tokens ┃ % of server ┃
+┡━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━┩
+│ grep           │    254 │       10.6% │
+│ run_tests      │    208 │        8.7% │
+│ list_files     │    199 │        8.3% │
+│ edit_file      │    186 │        7.8% │
+│ run_command    │    174 │        7.3% │
+│ read_file      │    172 │        7.2% │
+│ get_git_diff   │    164 │        6.9% │
+│ fetch_url      │    158 │        6.6% │
+│ create_branch  │    155 │        6.5% │
+│ write_file     │    152 │        6.3% │
+│ search_docs    │    147 │        6.1% │
+│ get_git_status │    130 │        5.4% │
+│ lint           │    108 │        4.5% │
+│ format_code    │    107 │        4.5% │
+│ package_info   │     80 │        3.3% │
+└────────────────┴────────┴─────────────┘
+
+…
+
+╭─ mcp-bloat summary ───────────────────────────────────────────────────╮
+│ Total: 27,762 tokens  (13.9% of a 200,000-token context window)       │
+│ Of your 27,762 tokens, that's:                                        │
+│   2.8% of Claude Sonnet 5.5's 1,000,000 window                        │
+│   6.9% of GPT-5's 400,000 window                                      │
+│   2.6% of Gemini 2.5 Pro's 1,048,576 window                           │
+│   16.9% of DeepSeek V3's 163,840 window                               │
+│ Servers audited: 3                                                    │
+│ Counting method: tiktoken cl100k_base                                 │
+│ Most expensive single tool: list_workflow_run (mega-api) — 690 tokens │
+│ ⚠ Over 10,000 tokens on its own: mega-api (25,164)                    │
+╰───────────────────────────────────────────────────────────────────────╯
 ```
+
+After each config's server table, the report drills into that server's
+tools — every tool's token cost, fattest first, with its share of the
+server's tool bill — and the summary names the single most expensive
+tool of the whole run. Pass `--summary` to collapse the report back to
+per-server totals only; `--json` always includes the per-tool data
+(each server's `tools` array, plus a top-level `most_expensive_tool`).
 
 In default mode (no `--model`/`--window`), the summary also lines your
 total up against several current frontier models' context windows at

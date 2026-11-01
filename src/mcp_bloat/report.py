@@ -10,7 +10,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .audit import ServerAudit
+from .audit import ServerAudit, ToolInfo
 from .discovery import DiscoveryWarning
 from .models import DEFAULT_CONTEXT_WINDOW, ModelInfo, short_display_name
 from .tokens import counting_method
@@ -23,6 +23,36 @@ BLOAT_THRESHOLD = 10_000  # a single server above this gets flagged
 
 def grand_total(results: list[ServerAudit]) -> int:
     return sum(r.total_tokens for r in results)
+
+
+def sorted_tools(audit: ServerAudit) -> list[ToolInfo]:
+    """A server's tools, most expensive first."""
+    return sorted(audit.tools, key=lambda t: t.tokens, reverse=True)
+
+
+def percent_of_server(tool_tokens: int, audit: ServerAudit) -> float:
+    """A tool's share of its server's tool-token total, as a percentage.
+
+    The per-tool counts sum to the server's tools_tokens by
+    construction, so the shares of one server's tools add up to 100%.
+    """
+    if audit.tools_tokens <= 0:
+        return 0.0
+    return 100.0 * tool_tokens / audit.tools_tokens
+
+
+def most_expensive_tool(
+    results: list[ServerAudit],
+) -> tuple[ServerAudit, ToolInfo] | None:
+    """The single priciest tool across all successfully audited servers."""
+    best: tuple[ServerAudit, ToolInfo] | None = None
+    for result in results:
+        if not result.ok:
+            continue
+        for info in result.tools:
+            if best is None or info.tokens > best[1].tokens:
+                best = (result, info)
+    return best
 
 
 def percent_of_context(
@@ -49,12 +79,22 @@ def to_json_dict(
     frontier: list[ModelInfo] | None = None,
 ) -> dict:
     total = grand_total(results)
+    top = most_expensive_tool(results)
     report = {
         "counting_method": counting_method(),
         "model": model.id if model else None,
         "context_window": context_window,
         "total_tokens": total,
         "percent_of_context": round(percent_of_context(total, context_window), 2),
+        "most_expensive_tool": (
+            {
+                "server": top[0].entry.name,
+                "tool": top[1].name,
+                "tokens": top[1].tokens,
+            }
+            if top is not None
+            else None
+        ),
         "servers": [
             {
                 "name": r.entry.name,
@@ -65,7 +105,14 @@ def to_json_dict(
                 "error": r.error,
                 "tool_count": r.tool_count,
                 "tools": [
-                    {"name": t.name, "tokens": t.tokens} for t in r.tools
+                    {
+                        "name": t.name,
+                        "tokens": t.tokens,
+                        "percent_of_server": round(
+                            percent_of_server(t.tokens, r), 2
+                        ),
+                    }
+                    for t in sorted_tools(r)
                 ],
                 "tools_tokens": r.tools_tokens,
                 "prompt_count": r.prompt_count,
@@ -118,6 +165,26 @@ def _fmt(n: int) -> str:
     return f"{n:,}"
 
 
+def _render_tool_breakdown(console: Console, audit: ServerAudit) -> None:
+    """One server's tools, most expensive first."""
+    table = Table(
+        title=f"{audit.entry.name} — tools by cost",
+        title_justify="left",
+        header_style="bold",
+    )
+    table.add_column("Tool")
+    table.add_column("Tokens", justify="right")
+    table.add_column("% of server", justify="right")
+    for info in sorted_tools(audit):
+        table.add_row(
+            info.name,
+            _fmt(info.tokens),
+            f"{percent_of_server(info.tokens, audit):.1f}%",
+        )
+    console.print(table)
+    console.print()
+
+
 def render_terminal(
     results: list[ServerAudit],
     warnings: list[DiscoveryWarning] | None = None,
@@ -125,6 +192,7 @@ def render_terminal(
     context_window: int = DEFAULT_CONTEXT_WINDOW,
     model: ModelInfo | None = None,
     frontier: list[ModelInfo] | None = None,
+    show_tools: bool = True,
 ) -> None:
     console = console or Console()
 
@@ -179,6 +247,10 @@ def render_terminal(
                 )
         console.print(table)
         console.print()
+        if show_tools:
+            for r in group:
+                if r.ok and r.tools:
+                    _render_tool_breakdown(console, r)
 
     total = grand_total(results)
     ok_count = sum(1 for r in results if r.ok)
@@ -215,6 +287,14 @@ def render_terminal(
             f"\nModel: {model.id} ({model.name}) — window "
             f"{_fmt(context_window)} tokens, via {model.source}"
         )
+    if show_tools:
+        top = most_expensive_tool(results)
+        if top is not None:
+            server, info = top
+            summary.append(
+                f"\nMost expensive single tool: {info.name} "
+                f"({server.entry.name}) — {_fmt(info.tokens)} tokens"
+            )
     if bloated:
         names = ", ".join(
             f"{r.entry.name} ({_fmt(r.total_tokens)})" for r in bloated

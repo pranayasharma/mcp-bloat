@@ -41,6 +41,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print machine-readable JSON instead of the terminal report",
     )
     parser.add_argument(
+        "--summary",
+        action="store_true",
+        help=(
+            "show only the per-server totals, without the per-tool "
+            "breakdown (JSON output always includes per-tool data)"
+        ),
+    )
+    parser.add_argument(
         "--budget",
         type=int,
         default=None,
@@ -270,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
             context_window=context_window,
             model=model,
             frontier=frontier,
+            show_tools=not args.summary,
         )
 
     if args.budget is not None and total > args.budget:
