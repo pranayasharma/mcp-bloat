@@ -1,0 +1,111 @@
+# mcp-bloat
+
+**Audit how many tokens your MCP servers eat from your context window — before your agent pays for them.**
+
+Every MCP server you connect makes your AI client load that server's tool
+schemas into the model's context — on every session, before you've asked a
+single question. A handful of servers can quietly consume a noticeable
+share of the context window. `mcp-bloat` measures it: it finds your MCP
+configs, connects to each server for real, and prints the token bill.
+
+## Install
+
+```bash
+pip install mcp-bloat
+# or, without installing:
+uvx mcp-bloat
+```
+
+For exact token counts (tiktoken's `cl100k_base` instead of a chars/4
+estimate), install the `accurate` extra:
+
+```bash
+pip install "mcp-bloat[accurate]"
+```
+
+## Usage
+
+```bash
+# Audit every MCP server in your known client configs
+mcp-bloat
+
+# See it work without configuring anything: audits three generated demo servers
+mcp-bloat --demo
+
+# Machine-readable output
+mcp-bloat --json
+
+# Fail CI if your servers eat more than 30,000 tokens of context
+mcp-bloat --budget 30000
+
+# Audit one specific config file
+mcp-bloat --config ./mcp.json
+```
+
+## Sample output
+
+From `mcp-bloat --demo` (three generated servers: a tidy one, a medium
+one, and a deliberately huge one):
+
+```
+Demo — mcp-bloat --demo (generated config)
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━┓
+┃ Server      ┃ Transport ┃ Tools ┃ Tokens ┃ % of 200k ctx ┃ Status  ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━┩
+│ notes-lite  │ stdio     │     3 │    204 │          0.1% │ ok      │
+│ dev-toolbox │ stdio     │    15 │  2,394 │          1.2% │ ok      │
+│ mega-api    │ stdio     │    50 │ 25,164 │         12.6% │ ⚠ BLOAT │
+└─────────────┴───────────┴───────┴────────┴───────────────┴─────────┘
+
+╭─ mcp-bloat summary ─────────────────────────────────────────────╮
+│ Total: 27,762 tokens  (13.9% of a 200,000-token context window) │
+│ Servers audited: 3                                              │
+│ Counting method: tiktoken cl100k_base                           │
+│ ⚠ Over 10,000 tokens on its own: mega-api (25,164)              │
+╰─────────────────────────────────────────────────────────────────╯
+```
+
+Any single server over 10,000 tokens is flagged `⚠ BLOAT`.
+
+## How the counting works
+
+For each configured server, `mcp-bloat`:
+
+1. Connects to the server over MCP (stdio or streamable HTTP) and performs
+   the standard initialize handshake.
+2. Calls `tools/list` (and `prompts/list` / `resources/list` when the
+   server supports them — prompts and resources are surfaced to the model
+   too).
+3. For every tool, serializes `{name, description, inputSchema}` to JSON —
+   the same information a client sends to the model so it can call the
+   tool — and counts the tokens in that string.
+
+Token counting uses tiktoken's `cl100k_base` encoding when the
+`accurate` extra is installed, and falls back to a chars/4 estimate
+otherwise. The report always states which method produced the numbers.
+
+This is a close proxy for what clients actually send, not a byte-exact
+replica: individual clients wrap tool definitions slightly differently,
+and models with different tokenizers will count a little differently.
+Treat the numbers as accurate to a few percent — more than enough to find
+the server that's eating your context.
+
+Servers that fail to start or don't respond within the timeout
+(default 20s, `--timeout` to change) are reported as errors; they never
+abort the rest of the audit. Server stderr is discarded so broken
+servers can't corrupt the report.
+
+## Config locations searched
+
+- **Claude Code** — `~/.claude.json`, `./.mcp.json`
+- **Cursor** — `~/.cursor/mcp.json`, `./.cursor/mcp.json`
+- **Claude Desktop** — `~/.config/Claude/claude_desktop_config.json`,
+  `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windsurf** — `~/.codeium/windsurf/mcp_config.json`
+- **VS Code** — `./.vscode/mcp.json` (the `servers` key)
+
+Malformed config files produce a warning, not a crash.
+
+## License
+
+MIT
